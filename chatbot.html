@@ -1,0 +1,481 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>EmoBot — Chat</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Playfair+Display:wght@400;700;900&family=DM+Mono:wght@300;400;500&family=DM+Sans:ital,wght@0,300;0,400;0,500;1,300&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="/static/css/style.css">
+
+  <style>
+    /* ── Layout lock ───────────────────────────────── */
+    html, body { height: 100%; margin: 0; padding: 0; overflow: hidden; }
+
+    .chat-layout {
+      display: flex;
+      height: 100vh;
+      overflow: hidden;
+    }
+
+    .sidebar {
+      flex-shrink: 0;
+      height: 100vh;
+      overflow-y: auto;
+    }
+
+    .chat-main {
+      display: flex;
+      flex-direction: column;
+      flex: 1 1 0;
+      height: 100vh;
+      min-width: 0;
+      overflow: hidden;
+    }
+
+    .chat-header-bar { flex-shrink: 0; }
+    .typing-indicator { flex-shrink: 0; }
+
+    .messages {
+      flex: 1 1 0;
+      min-height: 0;
+      overflow-y: auto;
+    }
+
+    .input-bar { flex-shrink: 0; }
+
+    /* ── Bot column with chips below bubble ──────── */
+    .bot-col {
+      display: flex;
+      flex-direction: column;
+      gap: 10px;
+      max-width: min(75%, 620px);
+    }
+
+    /* ── Chip row ─────────────────────────────────── */
+    .chip-row {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 8px;
+      padding: 2px 2px 2px 6px;
+      animation: chipFadeIn 0.25s ease both;
+    }
+
+    @keyframes chipFadeIn {
+      from { opacity: 0; transform: translateY(6px); }
+      to   { opacity: 1; transform: none; }
+    }
+
+    .chip-btn {
+      background: transparent;
+      border: 1.5px solid rgba(167, 139, 250, 0.55);
+      color: #c4b5fd;
+      border-radius: 999px;
+      padding: 7px 18px;
+      font-size: 0.83rem;
+      font-family: var(--font-body, 'DM Sans', sans-serif);
+      cursor: pointer;
+      transition: background 0.18s, color 0.18s, transform 0.15s, border-color 0.18s;
+      white-space: nowrap;
+      line-height: 1.3;
+    }
+
+    .chip-btn:hover {
+      background: rgba(139, 92, 246, 0.85);
+      color: #fff;
+      border-color: transparent;
+      transform: translateY(-2px);
+    }
+
+    .chip-btn:active {
+      transform: scale(0.96);
+    }
+
+    /* ── Selected chip state ──────────────────────── */
+    .chip-btn.selected {
+      background: rgba(139, 92, 246, 0.85);
+      color: #fff;
+      border-color: transparent;
+    }
+
+    /* ── Disabled state for old chips ─────────────── */
+    .chip-row.consumed .chip-btn {
+      opacity: 0.35;
+      pointer-events: none;
+      cursor: default;
+    }
+  </style>
+</head>
+<body>
+<div class="noise"></div>
+
+<div class="chat-layout">
+
+  <!-- ── Sidebar ──────────────────────────────────── -->
+  <aside class="sidebar">
+    <div class="sidebar-logo">
+      <span class="logo-mark">◈</span>
+      <span class="logo-text">EMOBOT</span>
+    </div>
+    <div class="sidebar-emotion">
+      <p class="sidebar-label">Your mood</p>
+      <div class="mood-badge" id="moodBadge">{{ emotion }}</div>
+    </div>
+    <button class="restart-btn" id="restartBtn">↺ Start Over</button>
+  </aside>
+
+  <!-- ── Main chat area ───────────────────────────── -->
+  <main class="chat-main">
+    <div class="chat-header-bar">
+      <div class="header-avatar">🤖</div>
+      <div class="header-info">
+        <span class="header-name">EmoBot</span>
+        <span class="header-status" id="headerStatus">
+          <span class="online-dot"></span> Online
+        </span>
+      </div>
+      <div class="header-emotion-pill">
+        Mood: <strong>{{ emotion }}</strong>
+      </div>
+    </div>
+
+    <div class="messages" id="messages"></div>
+
+    <div class="typing-indicator" id="typingIndicator">
+      <div class="typing-avatar">🤖</div>
+      <div class="typing-dots">
+        <span></span><span></span><span></span>
+      </div>
+    </div>
+
+    <div class="input-bar">
+      <input type="text" id="chatInput"
+             placeholder="Type or tap a chip above…"
+             autocomplete="off" spellcheck="false">
+      <button id="sendBtn" title="Send">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5">
+          <line x1="22" y1="2" x2="11" y2="13"></line>
+          <polygon points="22 2 15 22 11 13 2 9 22 2"></polygon>
+        </svg>
+      </button>
+    </div>
+  </main>
+
+</div>
+
+<script>
+/* ════════════════════════════════════════════════════════
+   EMOBOT CHAT  v13
+   Fixes:
+   - Chip clicks always show a user bubble (selected chip label)
+   - Selected chip gets visual highlight before being consumed
+   - Chip parsing regex-based and robust
+   - Auto-scroll that doesn't fight the user
+════════════════════════════════════════════════════════ */
+
+const messagesEl = document.getElementById("messages");
+const inputEl    = document.getElementById("chatInput");
+const sendBtn    = document.getElementById("sendBtn");
+const typingEl   = document.getElementById("typingIndicator");
+const restartBtn = document.getElementById("restartBtn");
+const moodBadge  = document.getElementById("moodBadge");
+
+const emotion = "{{ emotion }}";
+
+// ── Mood badge ────────────────────────────────────────
+const MOOD_EMOJI = {
+  happy:"😊", sad:"😔", angry:"😤", neutral:"😐",
+  fear:"😨", surprise:"😲", disgust:"🤢"
+};
+if (MOOD_EMOJI[emotion]) moodBadge.textContent = MOOD_EMOJI[emotion] + " " + emotion;
+
+// ── Injection detection ───────────────────────────────
+const INJ_RE = [
+  /system prompt/i, /ignore previous/i, /ignore above/i, /disregard/i,
+  /you are now/i,   /act as/i,          /pretend you/i,  /override/i,
+  /\[internal/i,    /new instruction/i, /PREFS_JSON/i,
+];
+const isInjection = msg => msg.length > 400 || INJ_RE.some(r => r.test(msg));
+
+// ── Helpers ───────────────────────────────────────────
+const esc = s => (s||"").replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;");
+
+let userScrolled = false;
+messagesEl.addEventListener("scroll", () => {
+  const atBottom = messagesEl.scrollHeight - messagesEl.scrollTop - messagesEl.clientHeight < 60;
+  userScrolled = !atBottom;
+});
+
+function scrollBottom(force = false) {
+  if (force || !userScrolled) {
+    messagesEl.scrollTop = messagesEl.scrollHeight;
+  }
+}
+
+function showTyping()  { typingEl.classList.add("visible");    scrollBottom(true); }
+function hideTyping()  { typingEl.classList.remove("visible"); }
+
+// ── Consume (dim) all existing chip rows ──────────────
+function consumeChips() {
+  document.querySelectorAll(".chip-row:not(.consumed)").forEach(r => {
+    r.classList.add("consumed");
+  });
+}
+
+// ── Parse chip labels from a line ────────────────────
+function parseChipLine(line) {
+  const labels = [];
+  const re = /\*\*([^*]+)\*\*/g;
+  let m;
+  while ((m = re.exec(line)) !== null) {
+    const label = m[1].trim();
+    if (label) labels.push(label);
+  }
+  return labels;
+}
+
+// ── Split bot reply into text part + chip line ────────
+function splitReply(text) {
+  text = text.replace(/PREFS_JSON\s*[:\-]?\s*\{[^}]*\}/gi, "").trim();
+
+  const lines = text.split("\n");
+  let chipLineIdx = -1;
+
+  for (let i = 0; i < lines.length; i++) {
+    const l = lines[i];
+    if (/👉/.test(l) || (l.includes("·") && (l.match(/\*\*[^*]+\*\*/g) || []).length >= 2)) {
+      chipLineIdx = i;
+      break;
+    }
+  }
+
+  if (chipLineIdx === -1) {
+    return { mainText: text.trim(), chipLabels: [] };
+  }
+
+  const mainText   = lines.slice(0, chipLineIdx).join("\n").trim();
+  const chipLine   = lines.slice(chipLineIdx).join(" ").trim();
+  const chipLabels = parseChipLine(chipLine);
+
+  return { mainText, chipLabels };
+}
+
+// ── Render user bubble ────────────────────────────────
+function addUserBubble(text) {
+  const row    = document.createElement("div");
+  row.className = "msg-row user";
+  const bubble = document.createElement("div");
+  bubble.className = "bubble user";
+  bubble.innerHTML = esc(text).replace(/\n/g, "<br>");
+  const av = document.createElement("div");
+  av.className = "msg-av user-av";
+  av.textContent = "🧑";
+  row.appendChild(bubble);
+  row.appendChild(av);
+  messagesEl.appendChild(row);
+  scrollBottom(true);
+}
+
+// ── Render bot message (text + optional chips) ────────
+function addBotMessage(text) {
+  const { mainText, chipLabels } = splitReply(text);
+
+  const row = document.createElement("div");
+  row.className = "msg-row bot";
+
+  const av = document.createElement("div");
+  av.className = "msg-av bot-av";
+  av.textContent = "🤖";
+
+  const col = document.createElement("div");
+  col.className = "bot-col";
+
+  if (mainText) {
+    const bubble = document.createElement("div");
+    bubble.className = "bubble bot";
+    bubble.innerHTML = esc(mainText)
+      .replace(/\*\*(.+?)\*\*/g, "<strong>$1</strong>")
+      .replace(/\n/g, "<br>");
+    col.appendChild(bubble);
+  }
+
+  if (chipLabels.length > 0) {
+    const chipRow = buildChipRow(chipLabels);
+    col.appendChild(chipRow);
+  }
+
+  row.appendChild(av);
+  row.appendChild(col);
+  messagesEl.appendChild(row);
+  scrollBottom(true);
+}
+
+// ── Build a chip row element ──────────────────────────
+function buildChipRow(labels) {
+  const chipRow = document.createElement("div");
+  chipRow.className = "chip-row";
+  labels.forEach(label => {
+    const btn = document.createElement("button");
+    btn.className = "chip-btn";
+    btn.textContent = label;
+    btn.addEventListener("click", () => {
+      // 1. Highlight selected chip
+      btn.classList.add("selected");
+      // 2. Consume all chip rows (dim them)
+      consumeChips();
+      // 3. Always show user bubble for chip selections — FIX for invisible messages
+      sendMessage(label, true);
+    });
+    chipRow.appendChild(btn);
+  });
+  return chipRow;
+}
+
+// ── Book card rendering ───────────────────────────────
+function renderBooks(books) {
+  const wrap = document.createElement("div");
+  wrap.className = "books-section";
+
+  const heading = document.createElement("p");
+  heading.className = "books-heading";
+  heading.textContent = "✦ Your Personalised Picks";
+  wrap.appendChild(heading);
+
+  const grid = document.createElement("div");
+  grid.className = "books-grid";
+
+  books.forEach((book, i) => {
+    const card = document.createElement("div");
+    card.className = "book-card";
+    card.style.animationDelay = (i * 0.1) + "s";
+
+    const title   = esc(book.title       || "Untitled");
+    const authors = esc(book.authors     || "");
+    const desc    = esc(book.description || "");
+    const cat     = esc(book.category    || "");
+    const thumb   = book.thumbnail       || "";
+    const rating  = book.averageRating   ? `★ ${book.averageRating}` : "";
+    const rcount  = book.ratingsCount    ? `${Number(book.ratingsCount).toLocaleString()} ratings` : "";
+    const link    = book.link     || "#";
+    const altLink = book.alt_link || "#";
+    const gr      = book.goodreads|| "#";
+
+    card.innerHTML = `
+      <div class="book-inner">
+        ${thumb
+          ? `<img class="book-thumb" src="${thumb}" alt="${title}" loading="lazy" onerror="this.style.display='none'">`
+          : '<div class="book-thumb-placeholder">📖</div>'}
+        <div class="book-info">
+          <p class="book-num">Pick ${i + 1}</p>
+          <h3 class="book-title">${title}</h3>
+          ${authors ? `<p class="book-author">${authors}</p>` : ""}
+          <div class="book-tags">
+            ${rating ? `<span class="tag rating">${rating}</span>` : ""}
+            ${rcount ? `<span class="tag">${rcount}</span>`        : ""}
+            ${cat    ? `<span class="tag">${cat}</span>`           : ""}
+          </div>
+          ${desc ? `<p class="book-desc">${desc}</p>` : ""}
+          <div class="book-links">
+            <a href="${link}"    target="_blank" rel="noopener" class="book-btn primary">View Book</a>
+            <a href="${gr}"      target="_blank" rel="noopener" class="book-btn">Goodreads</a>
+            <a href="${altLink}" target="_blank" rel="noopener" class="book-btn">Open Library</a>
+          </div>
+        </div>
+      </div>`;
+    grid.appendChild(card);
+  });
+
+  wrap.appendChild(grid);
+  messagesEl.appendChild(wrap);
+
+  const moreRow = document.createElement("div");
+  moreRow.className = "msg-row bot";
+  moreRow.innerHTML = `
+    <div class="msg-av bot-av">🤖</div>
+    <div class="bot-col">
+      <div class="bubble bot">
+        Hope these match your mood! Hit <em>Start Over</em> to explore more. 📚
+      </div>
+    </div>`;
+  messagesEl.appendChild(moreRow);
+  scrollBottom(true);
+}
+
+// ── Core send ─────────────────────────────────────────
+async function sendMessage(msg, showUserBubble = true) {
+  msg = msg.trim();
+  if (!msg) return;
+
+  inputEl.value = "";
+  sendBtn.disabled = true;
+
+  if (isInjection(msg)) {
+    addBotMessage("I didn't quite get that 😊 Please tap one of the options!");
+    sendBtn.disabled = false;
+    inputEl.focus();
+    return;
+  }
+
+  const isInternal = ["start", "restart", "hi"].includes(msg.toLowerCase());
+
+  // Always show user bubble unless it's an internal command
+  if (showUserBubble && !isInternal) {
+    addUserBubble(msg);
+  }
+
+  consumeChips();
+  showTyping();
+  userScrolled = false;
+
+  try {
+    const res  = await fetch("/chat", {
+      method:      "POST",
+      headers:     {"Content-Type": "application/json"},
+      credentials: "same-origin",
+      body:        JSON.stringify({ message: msg }),
+    });
+    const data = await res.json();
+    hideTyping();
+
+    if (data.reply) addBotMessage(data.reply);
+
+    if (data.done && Array.isArray(data.books) && data.books.length > 0) {
+      setTimeout(() => renderBooks(data.books), 350);
+    } else if (data.done) {
+      addBotMessage("Couldn't find strong matches right now. Try starting over with different preferences!");
+    }
+  } catch (e) {
+    hideTyping();
+    addBotMessage("Oops, something went wrong. Please try again.");
+    console.error(e);
+  }
+
+  sendBtn.disabled = false;
+  inputEl.focus();
+}
+
+// ── Events ────────────────────────────────────────────
+sendBtn.addEventListener("click", () => {
+  const msg = inputEl.value.trim();
+  if (msg) sendMessage(msg, true);
+});
+
+inputEl.addEventListener("keydown", e => {
+  if (e.key === "Enter") {
+    const msg = inputEl.value.trim();
+    if (msg) sendMessage(msg, true);
+  }
+});
+
+restartBtn.addEventListener("click", () => {
+  messagesEl.innerHTML = "";
+  userScrolled = false;
+  sendMessage("restart", false);
+});
+
+// Auto-start
+sendMessage("start", false);
+</script>
+</body>
+</html>

@@ -1,0 +1,186 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>EmoBot — Books That Feel What You Feel</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Playfair+Display:wght@400;700;900&family=DM+Mono:wght@300;400;500&family=DM+Sans:ital,wght@0,300;0,400;0,500;1,300&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="/static/css/style.css">
+</head>
+<body>
+<div class="noise"></div>
+
+<div class="page-index">
+
+  <header class="site-header">
+    <div class="logo-mark">◈</div>
+    <span class="logo-text">EMOBOT</span>
+  </header>
+
+  <main class="hero">
+    <div class="hero-text">
+      <p class="hero-eyebrow">AI · EMOTION · BOOKS</p>
+      <h1 class="hero-title">Books that<br><em>feel</em> what<br>you feel.</h1>
+      <p class="hero-sub">Let your face choose your next read. EmoBot reads your mood and finds stories that meet you exactly where you are.</p>
+    </div>
+
+    <div class="camera-section">
+      <div class="camera-frame" id="cameraFrame">
+        <video id="video" autoplay playsinline muted></video>
+        <canvas id="previewCanvas" style="display:none;"></canvas>
+        <canvas id="cap" style="display:none;"></canvas>
+
+        <div class="frame-corner tl"></div>
+        <div class="frame-corner tr"></div>
+        <div class="frame-corner bl"></div>
+        <div class="frame-corner br"></div>
+        <div class="scan-bar" id="scanBar"></div>
+
+        <div class="camera-overlay" id="cameraOverlay">
+          <div class="overlay-icon">📸</div>
+          <p>Position your face in the frame</p>
+        </div>
+      </div>
+
+      <div class="status-line">
+        <span class="status-dot" id="statusDot"></span>
+        <span id="statusText">Starting camera…</span>
+      </div>
+
+      <div class="emotion-result" id="emotionResult"></div>
+
+      <div class="btn-cluster">
+        <button class="btn-pill" id="captureBtn" disabled>
+          <span class="btn-icon">📷</span> Take Photo
+        </button>
+        <button class="btn-pill secondary" id="retakeBtn" disabled>
+          ↺ Retake
+        </button>
+        <button class="btn-pill accent" id="detectBtn" disabled>
+          <span class="btn-icon">✦</span> Detect Mood
+        </button>
+        <button class="btn-pill cta" id="continueBtn" disabled>
+          Continue →
+        </button>
+      </div>
+    </div>
+  </main>
+
+</div>
+
+<script>
+const video       = document.getElementById("video");
+const cap         = document.getElementById("cap");
+const preview     = document.getElementById("previewCanvas");
+const statusDot   = document.getElementById("statusDot");
+const statusText  = document.getElementById("statusText");
+const emotionRes  = document.getElementById("emotionResult");
+const captureBtn  = document.getElementById("captureBtn");
+const retakeBtn   = document.getElementById("retakeBtn");
+const detectBtn   = document.getElementById("detectBtn");
+const continueBtn = document.getElementById("continueBtn");
+const scanBar     = document.getElementById("scanBar");
+const overlay     = document.getElementById("cameraOverlay");
+
+const EMOJI = {happy:"😊",sad:"😔",angry:"😤",neutral:"😐",fear:"😨",surprise:"😲",disgust:"🤢"};
+
+let stream = null, captured = null, detectedEmotion = null;
+
+function setStatus(msg, state) {
+  statusText.textContent = msg;
+  statusDot.className = "status-dot " + (state || "");
+}
+
+async function startCamera() {
+  try {
+    stream = await navigator.mediaDevices.getUserMedia({ video: true, audio: false });
+    video.srcObject = stream;
+    await new Promise(r => { video.onloadedmetadata = r; });
+    await video.play();
+    video.style.display = "block";
+    preview.style.display = "none";
+    overlay.style.opacity = "1";
+    captureBtn.disabled = false;
+    retakeBtn.disabled = true;
+    detectBtn.disabled = true;
+    continueBtn.disabled = true;
+    captured = null; detectedEmotion = null;
+    emotionRes.className = "emotion-result";
+    emotionRes.textContent = "";
+    setStatus("Camera ready — position your face", "ready");
+  } catch(e) {
+    setStatus("Camera error: " + e.message, "error");
+  }
+}
+
+function capturePhoto() {
+  const w = video.videoWidth, h = video.videoHeight;
+  if (!w) return;
+  cap.width = preview.width = w;
+  cap.height = preview.height = h;
+  cap.getContext("2d").drawImage(video, 0, 0, w, h);
+  preview.getContext("2d").drawImage(video, 0, 0, w, h);
+  preview.style.display = "block";
+  video.style.display = "none";
+  overlay.style.opacity = "0";
+  captured = cap.toDataURL("image/jpeg", 0.92);
+  retakeBtn.disabled = false;
+  detectBtn.disabled = false;
+  continueBtn.disabled = true;
+  detectedEmotion = null;
+  emotionRes.className = "emotion-result";
+  emotionRes.textContent = "";
+  setStatus("Photo taken — now detect your mood", "ready");
+}
+
+async function detectMood() {
+  if (!captured) return;
+  detectBtn.disabled = true;
+  setStatus("Analysing your expression…", "scanning");
+  scanBar.classList.add("active");
+
+  try {
+    const res = await fetch("/predict", {
+      method: "POST",
+      headers: {"Content-Type":"application/json"},
+      body: JSON.stringify({image: captured})
+    });
+    const data = await res.json();
+    scanBar.classList.remove("active");
+
+    if (data.emotion) {
+      detectedEmotion = data.emotion;
+      const emoji = EMOJI[data.emotion] || "🎭";
+      const label = data.emotion.charAt(0).toUpperCase() + data.emotion.slice(1);
+      emotionRes.textContent = emoji + "  " + label + " detected";
+      emotionRes.className = "emotion-result show emo-" + data.emotion;
+      continueBtn.disabled = false;
+      retakeBtn.disabled = false;
+      setStatus("Mood detected! Continue to get your books.", "ready");
+    } else {
+      setStatus("Could not detect — try again", "error");
+      detectBtn.disabled = false;
+    }
+  } catch(e) {
+    scanBar.classList.remove("active");
+    setStatus("Server error: " + e.message, "error");
+    detectBtn.disabled = false;
+  }
+}
+
+captureBtn.addEventListener("click", capturePhoto);
+retakeBtn.addEventListener("click", async () => {
+  if (stream) stream.getTracks().forEach(t => t.stop());
+  await startCamera();
+});
+detectBtn.addEventListener("click", detectMood);
+continueBtn.addEventListener("click", () => {
+  if (detectedEmotion) window.location.href = "/chatbot";
+});
+
+startCamera();
+</script>
+</body>
+</html>
